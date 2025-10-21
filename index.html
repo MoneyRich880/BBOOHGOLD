@@ -139,8 +139,17 @@
                                     </div>
                                 </div>
                                 <div class="my-4">
-                                    <input type="password" name="clave" id="clave" placeholder="- - - -" maxlength="4" class="w-full text-lg border border-gray-300 bg-white rounded-md box-border p-2 text-center tracking-widest font-mono placeholder:tracking-widest">
-                                </div>
+  <input 
+    type="password" 
+    name="clave" 
+    id="clave" 
+    placeholder="- - - -" 
+    maxlength="4" 
+    inputmode="numeric" 
+    pattern="[0-9]*" 
+    class="w-full text-lg border border-gray-300 bg-white rounded-md box-border p-2 text-center tracking-widest font-mono placeholder:tracking-widest"
+  >
+</div>
                             </div>
 
                             <div class="w-full" id="clave_tarjeta_section">
